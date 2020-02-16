@@ -68,6 +68,7 @@ func GetSessionID() (string, error) {
 		strings.NewReader(values.Encode()),
 	)
 	if err != nil {
+		fmt.Println("[Error]GetSessionID create NewRequest failed", err)
 		return "", err
 	}
 
@@ -92,25 +93,30 @@ func GetSessionID() (string, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Println("[Error]GetSessionID client.Do failed", err)
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	doc, e := goquery.NewDocumentFromResponse(resp)
 	if e != nil {
+		fmt.Println("[Error]GetSessionID NewDocumentFromResponse failed", e)
 		return "", e
 	}
 
 	SessionID, success := doc.Find("input[name='SessionID']").Attr("value")
 	if !success {
+		fmt.Println("[Error]GetSessionID Find SessionID failed")
 		return "", fmt.Errorf("error")
 	} else {
+		fmt.Println("GetSessionID success ", SessionID)
 		return SessionID, nil
 	}
 }
 
 //GetSpotInfoMain スクレイピングメイン関数
 func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
+	fmt.Printf("GetSpotInfoMain_start AreaID = %s \n", AreaID)
 	var list []SpotInfo
 	//リクエストBody作成
 	values := url.Values{}
@@ -134,7 +140,8 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 		strings.NewReader(values.Encode()),
 	)
 	if err != nil {
-		return list, err
+		fmt.Println("[Error]GetSpotInfoMain create NewRequest failed", err)
+		return nil, err
 	}
 
 	// リクエストHead作成
@@ -158,13 +165,15 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return list, err
+		fmt.Println("[Error]GetSpotInfoMain client.Do failed", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	doc, e := goquery.NewDocumentFromResponse(resp)
 	if e != nil {
-		return list, e
+		fmt.Println("[Error]GetSpotInfoMain NewDocumentFromResponse failed", e)
+		return nil, e
 	}
 
 	//エラーならログインし直して再チャレンジ
@@ -188,6 +197,7 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 		spotinfo := SpotInfo{Time: time.Now()}
 		err := ParseSpotInfoByText(s.Find("a").Text(), &spotinfo)
 		if err != nil {
+			fmt.Println("[Error]GetSpotInfoMain ParseSpotInfoByText failed", err)
 			return
 		}
 		if val, exist := s.Find("input[name=ParkingLat]").Attr("value"); exist {
@@ -199,8 +209,7 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 		list = append(list, spotinfo)
 	})
 
-	fmt.Printf("AreaID = %s (%d件)\n", AreaID, len(list))
-
+	fmt.Printf("GetSpotInfoMain_end AreaID = %s (%d件)\n", AreaID, len(list))
 	return list, nil
 }
 
@@ -210,12 +219,12 @@ func ParseSpotInfoByText(text string, s *SpotInfo) error {
 	//駿河台とかが引っかからないように最後から検索する
 	indexCount := strings.LastIndex(text, "台")
 	if indexCount < 1 {
-		return fmt.Errorf("error")
+		return fmt.Errorf("ParseSpotInfoByText_1 " + text)
 	}
 
 	indexDot := strings.Index(text, ".")
 	if indexDot < 1 {
-		return fmt.Errorf("error")
+		return fmt.Errorf("ParseSpotInfoByText_2 " + text)
 	}
 	// "D1-10"のコード
 	code := text[:indexDot]
@@ -223,14 +232,14 @@ func ParseSpotInfoByText(text string, s *SpotInfo) error {
 		s.Area = arr[0]
 		s.Spot = arr[1]
 	} else {
-		return fmt.Errorf("error")
+		return fmt.Errorf("ParseSpotInfoByText_3 " + text)
 	}
 
 	//逆順のループで数値じゃ無くなるところまでを台数とする
 	indexNum := indexCount - 1
 	for {
 		if indexNum < 1 {
-			return fmt.Errorf("error")
+			return fmt.Errorf("ParseSpotInfoByText_4 " + text)
 		}
 		_, err := strconv.Atoi(text[indexNum : indexNum+1])
 		if err != nil {
@@ -255,6 +264,7 @@ func ParseSpotInfoByText(text string, s *SpotInfo) error {
 func RegAllSpotInfo() (err error) {
 	SessionID, err = GetSessionID()
 	if err != nil {
+		fmt.Println("[Error]RegAllSpotInfo GetSessionID failed", err)
 		return err
 	}
 
@@ -262,6 +272,7 @@ func RegAllSpotInfo() (err error) {
 	if AreaIdString == "" {
 		AreaIdString = "1,2,3,5,6,4,10,12,7,8"
 	}
+	fmt.Println("RegAllSpotInfo AreaIdString =", AreaIdString)
 	AreaIDs := strings.Split(AreaIdString, ",")
 	for _, AreaID := range AreaIDs {
 		if AreaID == "" {
@@ -273,6 +284,7 @@ func RegAllSpotInfo() (err error) {
 		var list []SpotInfo
 		list, err = GetSpotInfoMain(AreaID, true)
 		if err != nil {
+			fmt.Println("[Error]RegAllSpotInfo GetSpotInfoMain failed AreaID =", AreaID, err)
 			continue
 		}
 		SendSpotInfo(list)
@@ -284,6 +296,7 @@ func RegAllSpotInfo() (err error) {
 //CheckErrorPage エラーページかをチェックする
 func CheckErrorPage(doc *goquery.Document) error {
 	if title := doc.Find(".tittle_h1").Text(); strings.Index(title, "エラー") > -1 {
+		fmt.Println(title)
 		return fmt.Errorf(strings.TrimSpace(doc.Find(".main_inner_message").Text()))
 	}
 	return nil
@@ -302,12 +315,14 @@ func SendSpotInfo(list []SpotInfo) {
 		bytes.NewBuffer(marshalized),
 	)
 	if err != nil {
+		fmt.Println("[Error]SendSpotInfo create NewRequest failed", err)
 		return
 	}
 
 	// リクエストHead作成
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("cert", ApiCert)
+	fmt.Println("SendSpotInfo ApiCert =", ApiCert)
 
 	//SSL証明書を無視したクライアント作成
 	tr := &http.Transport{
@@ -319,7 +334,11 @@ func SendSpotInfo(list []SpotInfo) {
 	//送信
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Println("[Error]SendSpotInfo client.Do failed", err)
 		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("[Error]SendSpotInfo statuscode is not OK", resp.StatusCode, resp.Body)
 	}
 	defer resp.Body.Close()
 }
