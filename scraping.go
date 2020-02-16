@@ -150,7 +150,7 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 	req.Header.Set("Accept-Language", "ja,en-US;q=0.9,en;q=0.8,pt;q=0.7")
 	req.Header.Set("Cache-Control", "max-age=0")
 	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Content-Length", "219")
+	req.Header.Set("Content-Length", "230")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Host", "tcc.docomo-cycle.jp")
 	req.Header.Set("Origin", "https://tcc.docomo-cycle.jp")
@@ -288,7 +288,7 @@ func RegAllSpotInfo() (err error) {
 			continue
 		}
 		//とりあえず最大１００件にしてみる
-		if len(list) < 100 {
+		if len(list) <= 100 {
 			SendSpotInfo(list)
 		} else {
 			SendSpotInfo(list[:100])
