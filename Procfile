@@ -1,1 +1,1 @@
-web: scraping
+web: ./bin/heroku_scraper
