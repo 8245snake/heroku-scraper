@@ -287,7 +287,13 @@ func RegAllSpotInfo() (err error) {
 			fmt.Println("[Error]RegAllSpotInfo GetSpotInfoMain failed AreaID =", AreaID, err)
 			continue
 		}
-		SendSpotInfo(list)
+		//とりあえず最大１００件にしてみる
+		if len(list) < 100 {
+			SendSpotInfo(list)
+		} else {
+			SendSpotInfo(list[:100])
+			SendSpotInfo(list[100:])
+		}
 	}
 
 	return nil
@@ -322,7 +328,6 @@ func SendSpotInfo(list []SpotInfo) {
 	// リクエストHead作成
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("cert", ApiCert)
-	fmt.Println("SendSpotInfo ApiCert =", ApiCert)
 
 	//SSL証明書を無視したクライアント作成
 	tr := &http.Transport{
