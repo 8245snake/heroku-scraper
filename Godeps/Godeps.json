@@ -1,7 +1,10 @@
 {
-	"ImportPath": ".",
+	"ImportPath": "scraping/heroku_scraper",
 	"GoVersion": "go1.13",
 	"GodepVersion": "v80",
+	"Packages": [
+		"./..."
+	],
 	"Deps": [
 		{
 			"ImportPath": "github.com/PuerkitoBio/goquery",
