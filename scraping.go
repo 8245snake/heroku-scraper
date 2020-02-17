@@ -5,10 +5,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +26,9 @@ var lock = sync.RWMutex{}
 
 //lastExcuted 最終実行時刻
 var lastExcuted int64
+
+//lastRecovered 最終リカバリ時刻
+var lastRecovered int64
 
 //Httpでもらう設定値
 var UserID string
@@ -294,11 +300,11 @@ func RegAllSpotInfo() (err error) {
 		}
 		//とりあえず最大１００件にしてみる
 		if len(list) <= 100 {
-			SendSpotInfo(list)
+			SendSpotInfo(ConvertSpotinfoStruct(list), false)
 		} else {
-			SendSpotInfo(list[:100])
+			SendSpotInfo(ConvertSpotinfoStruct(list[:100]), false)
 			time.Sleep(1 * time.Second)
-			SendSpotInfo(list[100:])
+			SendSpotInfo(ConvertSpotinfoStruct(list[100:]), false)
 		}
 	}
 	fmt.Println("RegAllSpotInfo_End")
@@ -314,12 +320,17 @@ func CheckErrorPage(doc *goquery.Document) error {
 	return nil
 }
 
-//SendSpotInfo DBに送信する
-func SendSpotInfo(list []SpotInfo) {
+//ConvertSpotinfoStruct JSON用構造体に変換する
+func ConvertSpotinfoStruct(list []SpotInfo) JSpotinfo {
 	var jsonStruct JSpotinfo
 	for _, s := range list {
 		jsonStruct.Add(s.Time, s.Area, s.Spot, s.Count)
 	}
+	return jsonStruct
+}
+
+//SendSpotInfo DBに送信する。JSONファイルからのリカバリの場合は失敗したらJSONを保存しないフラグ（第２引数）
+func SendSpotInfo(jsonStruct JSpotinfo, fromRecovery bool) error {
 	marshalized, _ := json.Marshal(jsonStruct)
 	req, err := http.NewRequest(
 		"POST",
@@ -327,8 +338,8 @@ func SendSpotInfo(list []SpotInfo) {
 		bytes.NewBuffer(marshalized),
 	)
 	if err != nil {
-		fmt.Println("[Error]SendSpotInfo create NewRequest failed", err)
-		return
+		fmt.Println("[Error]SendSpotInfo create NewRequest failed", err.Error())
+		return err
 	}
 
 	// リクエストHead作成
@@ -340,13 +351,21 @@ func SendSpotInfo(list []SpotInfo) {
 	//送信
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("[Error]SendSpotInfo client.Do failed", err)
-		return
+		fmt.Println("[Error]SendSpotInfo client.Do failed", err.Error())
+		if !fromRecovery {
+			SaveJSON(jsonStruct)
+		}
+		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		fmt.Println("[Error]SendSpotInfo statuscode is not OK", resp.StatusCode, resp.Body)
+		fmt.Println("[Error]SendSpotInfo StatusCode is not OK", resp.StatusCode, resp.Body)
+		if !fromRecovery {
+			SaveJSON(jsonStruct)
+		}
+		return fmt.Errorf("StatusCode is not OK : %d", resp.StatusCode)
 	}
 	defer resp.Body.Close()
+	return nil
 }
 
 //TestGetSpotInfoMain 単体テスト
@@ -457,13 +476,111 @@ func InitClient() {
 	}
 }
 
-//Recover SQLiteからリカバリー
-func Recover(w rest.ResponseWriter, r *rest.Request) {
+//SaveJSON JSONファイルに保存する
+func SaveJSON(jsonStruct JSpotinfo) error {
+	filePath := strconv.FormatInt(time.Now().Unix(), 10) + "_save.json"
+	if runtime.GOOS != "windows" {
+		filePath = "/tmp/" + filePath
+	}
+	fp, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0664)
+	if err != nil {
+		fmt.Println(err.Error())
+		return err
+	}
+	defer fp.Close()
 
+	e := json.NewEncoder(fp)
+	if err := e.Encode(jsonStruct); err != nil {
+		fmt.Println(err.Error())
+		return err
+	}
+	return nil
+}
+
+//EnumTempFiles 一時ファイルを列挙する
+func EnumTempFiles() (result []string) {
+	pattern := "*_save.json"
+	if runtime.GOOS != "windows" {
+		pattern = "/tmp/" + pattern
+	}
+	if files, err := filepath.Glob(pattern); err != nil {
+		fmt.Println("EnumTempFiles_Error :", err.Error())
+	} else {
+		result = files
+	}
+	return
+}
+
+//Recover JSONからリカバリー
+func Recover(w rest.ResponseWriter, r *rest.Request) {
+	if lastExcuted <= 0 {
+		fmt.Println("未初期化のためキャンセルしました。")
+		w.WriteHeader(http.StatusConflict)
+		w.WriteJson("recovery canceled")
+		return
+	}
+	//2分以内の連続実行を禁止する
+	if now := time.Now().Unix(); now-lastRecovered < 120 {
+		fmt.Println("2分以内に連続でリクエストされたためキャンセルしました。")
+		w.WriteHeader(http.StatusConflict)
+		w.WriteJson("recovery canceled")
+		return
+	}
+	lastRecovered = time.Now().Unix()
+	//パラメータ解析
+	r.ParseForm()
+	params := r.Form
+	//最大件数
+	max := 5
+	if param := params.Get("max"); param != "" {
+		if val, err := strconv.Atoi(param); err == nil {
+			max = val
+		}
+	}
+
+	files := EnumTempFiles()
+	if len(files) < 1 {
+		fmt.Println("no recovery cache")
+		return
+	}
+	for i, filename := range files {
+		if i >= max {
+			break
+		}
+		path := filename
+		if runtime.GOOS != "windows" {
+			path = "/tmp/" + path
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return
+		}
+		defer file.Close()
+		d := json.NewDecoder(file)
+		d.DisallowUnknownFields() // エラーの場合 json: unknown field "JSONのフィールド名"
+		var jsonstruct JSpotinfo
+		if err := d.Decode(&jsonstruct); err != nil && err != io.EOF {
+			fmt.Println(err)
+			return
+		}
+		//DB登録処理
+		if err := SendSpotInfo(jsonstruct, true); err != nil {
+			//同じファイルで失敗し続けないようにしたいが何回かリトライのチャンスを与えたいのでMAX回数を引き上げる
+			max++
+		} else {
+			//成功したらファイル削除
+			if err := os.Remove(path); err != nil {
+				fmt.Println(err.Error())
+			}
+		}
+	}
 }
 
 // func main() {
-// 	//TestGetSpotInfoMain("./江東区.html")
+// 	// list, _ := TestGetSpotInfoMain("./港.html")
+// 	// SaveJSON(ConvertSpotinfoStruct(list))
+// 	SendAddress = "http://localhost:5001/private/counts"
+
 // }
 
 func main() {
