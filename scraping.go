@@ -18,7 +18,11 @@ import (
 	"github.com/ant0ine/go-json-rest/rest"
 )
 
+//lock 排他制御
 var lock = sync.RWMutex{}
+
+//lastExcuted 最終実行時刻
+var lastExcuted int64
 
 //Httpでもらう設定値
 var UserID string
@@ -266,11 +270,14 @@ func ParseSpotInfoByText(text string, s *SpotInfo) error {
 
 //RegAllSpotInfo 全スポット登録関数
 func RegAllSpotInfo() (err error) {
+	//ロックする
+	lock.Lock()
+	defer lock.Unlock()
 	//特に指定してない場合は全スポット
 	if AreaIdString == "" {
 		AreaIdString = "1,2,3,5,6,4,10,12,7,8"
 	}
-	fmt.Println("RegAllSpotInfo AreaIdString =", AreaIdString)
+	fmt.Println("RegAllSpotInfo_Start AreaIdString =", AreaIdString)
 	AreaIDs := strings.Split(AreaIdString, ",")
 	for _, AreaID := range AreaIDs {
 		if AreaID == "" {
@@ -294,7 +301,7 @@ func RegAllSpotInfo() (err error) {
 			SendSpotInfo(list[100:])
 		}
 	}
-
+	fmt.Println("RegAllSpotInfo_End")
 	return nil
 }
 
@@ -380,6 +387,15 @@ func TestGetSpotInfoMain(html string) ([]SpotInfo, error) {
 
 //Start スクレイピング開始
 func Start(w rest.ResponseWriter, r *rest.Request) {
+	//2分以内の連続実行を禁止する
+	if now := time.Now().Unix(); now-lastExcuted < 120 {
+		fmt.Println("2分以内に連続でリクエストされたためキャンセルしました。")
+		w.WriteHeader(http.StatusConflict)
+		w.WriteJson("scraping canceled")
+		return
+	}
+	lastExcuted = time.Now().Unix()
+	//パラメータ解析
 	r.ParseForm()
 	params := r.Form
 	SendAddress = params.Get("address")
@@ -447,7 +463,7 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 }
 
 // func main() {
-// 	TestGetSpotInfoMain("./江東区.html")
+// 	//TestGetSpotInfoMain("./江東区.html")
 // }
 
 func main() {
