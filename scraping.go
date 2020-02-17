@@ -432,7 +432,7 @@ func Start(w rest.ResponseWriter, r *rest.Request) {
 func InitClient() {
 	//SSL証明書を無視したクライアント作成
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: false},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client = &http.Client{
 		Transport: tr,
