@@ -115,6 +115,8 @@ func GetSessionID() (string, error) {
 		return "", fmt.Errorf("error")
 	} else {
 		fmt.Println("GetSessionID success ", SessionID)
+		//成功したら待ち時間（1回目の検索に失敗するため）
+		time.Sleep(3 * time.Second)
 		return SessionID, nil
 	}
 }
@@ -200,7 +202,8 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 	//スポットリスト解析
 	doc.Find("form[name^=tab_]").Each(func(i int, s *goquery.Selection) {
 		spotinfo := SpotInfo{Time: time.Now()}
-		err := ParseSpotInfoByText(s.Find("a").Text(), &spotinfo)
+		html, _ := s.Find("a").Html()
+		err := ParseSpotInfoByText(html, &spotinfo)
 		if err != nil {
 			fmt.Println("[Error]GetSpotInfoMain ParseSpotInfoByText failed", err)
 			return
@@ -219,60 +222,48 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 }
 
 //ParseSpotInfoByText テキスト解析
-// "B1-01.十思公園B1-01.Jisshi Park8台"の形式のテキストからarea,spot,name,countを取得する
+// "H1-43.東京イースト21<br/>H1-43.Tokyo East 21<br/>13台"の形式のテキストからarea,spot,name,countを取得する
 func ParseSpotInfoByText(text string, s *SpotInfo) error {
-	//駿河台とかが引っかからないように最後から検索する
-	indexCount := strings.LastIndex(text, "台")
-	if indexCount < 1 {
-		return fmt.Errorf("ParseSpotInfoByText_1 " + text)
+	var codeAndName, cycleCount string
+	if arr := strings.Split(text, "<br/>"); len(arr) == 3 {
+		codeAndName = arr[0]
+		cycleCount = arr[2]
+	} else {
+		return fmt.Errorf("[Error]ParseSpotInfoByText unexpected html : " + text)
 	}
 
-	indexDot := strings.Index(text, ".")
-	if indexDot < 1 {
-		return fmt.Errorf("ParseSpotInfoByText_2 " + text)
+	// "H1-43"の部分
+	indexDot := strings.Index(codeAndName, ".")
+	if indexDot < 0 {
+		return fmt.Errorf("[Error]ParseSpotInfoByText not cyclespot : " + text)
 	}
-	// "D1-10"のコード
-	code := text[:indexDot]
+	code := codeAndName[:indexDot]
 	if arr := strings.Split(code, "-"); len(arr) == 2 {
 		s.Area = arr[0]
 		s.Spot = arr[1]
 	} else {
-		return fmt.Errorf("ParseSpotInfoByText_3 " + text)
+		return fmt.Errorf("[Error]ParseSpotInfoByText unexpected code : " + text)
 	}
 
-	//逆順のループで数値じゃ無くなるところまでを台数とする
-	indexNum := indexCount - 1
-	for {
-		if indexNum < 1 {
-			return fmt.Errorf("ParseSpotInfoByText_4 " + text)
-		}
-		_, err := strconv.Atoi(text[indexNum : indexNum+1])
-		if err != nil {
-			s.Count = text[indexNum+1 : indexCount]
-			break
-		} else {
-			indexNum--
-		}
-	}
-
-	//名前を取得 基本的にはコードが2回目に現れるまでが日本語名だが、コードが1つしかないパターンもわずかにあるため分岐
-	if strings.LastIndex(text, code) > indexDot {
-		s.Name = text[indexDot+1 : strings.LastIndex(text, code)]
+	//名前
+	s.Name = codeAndName[indexDot+1:]
+	//台数
+	if _, err := strconv.Atoi(cycleCount[:len(cycleCount)-3]); err == nil {
+		s.Count = cycleCount[:len(cycleCount)-3]
 	} else {
-		//このパターンでは日本語名と英語名が区別できない
-		s.Name = text[indexDot+1 : indexNum]
+		return fmt.Errorf("[Error]ParseSpotInfoByText count not obtained : " + text)
 	}
+
+	//データサイズチェック
+	if len(s.Area) > 3 || len(s.Spot) > 3 || len(s.Count) > 3 {
+		fmt.Println("[Error]ParseSpotInfoByText data size obver : " + text)
+	}
+
 	return nil
 }
 
 //RegAllSpotInfo 全スポット登録関数
 func RegAllSpotInfo() (err error) {
-	SessionID, err = GetSessionID()
-	if err != nil {
-		fmt.Println("[Error]RegAllSpotInfo GetSessionID failed", err)
-		return err
-	}
-
 	//特に指定してない場合は全スポット
 	if AreaIdString == "" {
 		AreaIdString = "1,2,3,5,6,4,10,12,7,8"
@@ -367,7 +358,8 @@ func TestGetSpotInfoMain(html string) ([]SpotInfo, error) {
 	//スポットリスト解析
 	doc.Find("form[name^=tab_]").Each(func(i int, s *goquery.Selection) {
 		spotinfo := SpotInfo{Time: time.Now()}
-		err := ParseSpotInfoByText(s.Find("a").Text(), &spotinfo)
+		html, _ := s.Find("a").Html()
+		err := ParseSpotInfoByText(html, &spotinfo)
 		if err != nil {
 			return
 		}
@@ -388,10 +380,8 @@ func TestGetSpotInfoMain(html string) ([]SpotInfo, error) {
 func Start(w rest.ResponseWriter, r *rest.Request) {
 	r.ParseForm()
 	params := r.Form
-	UserID = params.Get("id")
-	Password = params.Get("password")
 	SendAddress = params.Get("address")
-	if UserID == "" || Password == "" || SendAddress == "" {
+	if params.Get("id") == "" || params.Get("password") == "" || SendAddress == "" {
 		w.WriteHeader(http.StatusForbidden)
 		w.WriteJson("[ERROR] lack of parameter")
 		return
@@ -404,6 +394,33 @@ func Start(w rest.ResponseWriter, r *rest.Request) {
 	if val := os.Getenv("API_CERT"); val != "" {
 		ApiCert = val
 	}
+	//セッションIDを使いまわす
+	var err error
+	if SessionID == "" {
+		//空なら取得
+		UserID = params.Get("id")
+		Password = params.Get("password")
+		SessionID, err = GetSessionID()
+		if err != nil {
+			fmt.Println("[Error]Start GetSessionID failed", err)
+			w.WriteHeader(http.StatusBadRequest)
+			w.WriteJson("login failed")
+			return
+		}
+	} else {
+		if UserID != params.Get("id") || Password != params.Get("password") {
+			//前回ログイン情報と異なる場合はログインし直し
+			UserID = params.Get("id")
+			Password = params.Get("password")
+			SessionID, err = GetSessionID()
+			if err != nil {
+				fmt.Println("[Error]Start GetSessionID failed", err)
+				w.WriteHeader(http.StatusBadRequest)
+				w.WriteJson("login failed")
+				return
+			}
+		}
+	}
 	//スクレイピング実行（非同期）
 	go RegAllSpotInfo()
 	//先にOKを返しておく
@@ -415,7 +432,7 @@ func Start(w rest.ResponseWriter, r *rest.Request) {
 func InitClient() {
 	//SSL証明書を無視したクライアント作成
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: false},
 	}
 	client = &http.Client{
 		Transport: tr,
@@ -428,7 +445,7 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 }
 
 // func main() {
-// 	TestGetSpotInfoMain("./エラーページ.html")
+// 	TestGetSpotInfoMain("./江東区.html")
 // }
 
 func main() {
