@@ -190,7 +190,6 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 			if err != nil {
 				return nil, err
 			}
-			time.Sleep(1 * time.Second)
 			//再帰呼び出し（次はリトライしない）
 			return GetSpotInfoMain(AreaID, false)
 		} else {
@@ -205,7 +204,10 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 		html, _ := s.Find("a").Html()
 		err := ParseSpotInfoByText(html, &spotinfo)
 		if err != nil {
-			fmt.Println("[Error]GetSpotInfoMain ParseSpotInfoByText failed", err)
+			//メンテナンス中のスポットのエラーログは出力しない
+			if strings.Index(err.Error(), "not cyclespot") < 0 {
+				fmt.Println("[Error]GetSpotInfoMain ParseSpotInfoByText failed", err)
+			}
 			return
 		}
 		if val, exist := s.Find("input[name=ParkingLat]").Attr("value"); exist {
