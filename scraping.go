@@ -26,7 +26,12 @@ var Password string
 var SendAddress string
 var AreaIdString string
 var ApiCert string
+
+//SessionID セッション
 var SessionID string
+
+//client HTTPリクエストクライアント（使いまわした方がいいらしいのでグローバル化）
+var client *http.Client
 
 //SpotInfo スクレイピング結果を格納する構造体
 type SpotInfo struct {
@@ -73,12 +78,13 @@ func GetSessionID() (string, error) {
 	}
 
 	// リクエストHead作成
+	ContentLength := strconv.FormatInt(req.ContentLength, 10)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	req.Header.Set("Accept-Language", "ja,en-US;q=0.9,en;q=0.8,pt;q=0.7")
 	req.Header.Set("Cache-Control", "max-age=0")
 	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Content-Length", "144")
+	req.Header.Set("Content-Length", ContentLength)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Host", "tcc.docomo-cycle.jp")
 	req.Header.Set("Origin", "https://tcc.docomo-cycle.jp")
@@ -90,7 +96,6 @@ func GetSessionID() (string, error) {
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.106 Safari/537.36")
 
-	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println("[Error]GetSessionID client.Do failed", err)
@@ -145,12 +150,13 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 	}
 
 	// リクエストHead作成
+	ContentLength := strconv.FormatInt(req.ContentLength, 10)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	req.Header.Set("Accept-Language", "ja,en-US;q=0.9,en;q=0.8,pt;q=0.7")
 	req.Header.Set("Cache-Control", "max-age=0")
 	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Content-Length", "230")
+	req.Header.Set("Content-Length", ContentLength)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Host", "tcc.docomo-cycle.jp")
 	req.Header.Set("Origin", "https://tcc.docomo-cycle.jp")
@@ -162,10 +168,9 @@ func GetSpotInfoMain(AreaID string, retry bool) ([]SpotInfo, error) {
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.106 Safari/537.36")
 
-	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("[Error]GetSpotInfoMain client.Do failed", err)
+		fmt.Println("[Error]GetSpotInfoMain client.Do failed", err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -292,6 +297,7 @@ func RegAllSpotInfo() (err error) {
 			SendSpotInfo(list)
 		} else {
 			SendSpotInfo(list[:100])
+			time.Sleep(1 * time.Second)
 			SendSpotInfo(list[100:])
 		}
 	}
@@ -326,16 +332,11 @@ func SendSpotInfo(list []SpotInfo) {
 	}
 
 	// リクエストHead作成
+	ContentLength := strconv.FormatInt(req.ContentLength, 10)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Length", ContentLength)
 	req.Header.Set("cert", ApiCert)
 
-	//SSL証明書を無視したクライアント作成
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	client := &http.Client{
-		Transport: tr,
-	}
 	//送信
 	resp, err := client.Do(req)
 	if err != nil {
@@ -410,6 +411,17 @@ func Start(w rest.ResponseWriter, r *rest.Request) {
 	w.WriteJson("OK")
 }
 
+//InitClient クライアント初期化
+func InitClient() {
+	//SSL証明書を無視したクライアント作成
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client = &http.Client{
+		Transport: tr,
+	}
+}
+
 //Recover SQLiteからリカバリー
 func Recover(w rest.ResponseWriter, r *rest.Request) {
 
@@ -438,5 +450,6 @@ func main() {
 	if val := os.Getenv("PORT"); val != "" {
 		port = val
 	}
+	InitClient()
 	log.Fatal(http.ListenAndServe(":"+port, api.MakeHandler()))
 }
