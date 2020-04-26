@@ -21,6 +21,20 @@ import (
 	"github.com/ant0ine/go-json-rest/rest"
 )
 
+//////////////////////////////////////////////////////////////////////////////////////
+// 定数
+//////////////////////////////////////////////////////////////////////////////////////
+
+//TimeLayout 時刻フォーマット
+const TimeLayout = "2006/01/02 15:04:05"
+
+//AllSpot 全スポット
+const AllSpot = "1,2,3,5,6,4,10,12,7,8"
+
+//////////////////////////////////////////////////////////////////////////////////////
+// 変数
+//////////////////////////////////////////////////////////////////////////////////////
+
 //lock 排他制御
 var lock = sync.RWMutex{}
 
@@ -43,13 +57,17 @@ var SessionID string
 //client HTTPリクエストクライアント（使いまわした方がいいらしいのでグローバル化）
 var client *http.Client
 
+//////////////////////////////////////////////////////////////////////////////////////
+// 構造体
+//////////////////////////////////////////////////////////////////////////////////////
+
 //SpotInfo スクレイピング結果を格納する構造体
 type SpotInfo struct {
 	Time                              time.Time
 	Area, Spot, Count, Name, Lat, Lon string
 }
 
-//JSpotinfo JSONマージャリング構造体
+//JSpotinfo JSONマーシャリング構造体
 type JSpotinfo struct {
 	Spotinfo []InnerSpotinfo `json:"spotinfo"`
 }
@@ -62,10 +80,47 @@ type InnerSpotinfo struct {
 	Count string `json:"count"`
 }
 
+//JSpotmaster JSONマーシャリング構造体
+type JSpotmaster struct {
+	Spotmaster []InnerSpotmaster `json:"spotmaster"`
+}
+
+//InnerSpotmaster スポット情報
+type InnerSpotmaster struct {
+	Area string `json:"area"`
+	Spot string `json:"spot"`
+	Name string `json:"name"`
+	Lat  string `json:"lat"`
+	Lon  string `json:"lon"`
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+// レシーバ
+//////////////////////////////////////////////////////////////////////////////////////
+
 //Add SpotInfo構造体をJSON用にパースして加える
 func (s *JSpotinfo) Add(time time.Time, area string, spot string, count string) {
-	s.Spotinfo = append(s.Spotinfo, InnerSpotinfo{Time: time.Format("2006/01/02 15:04:05"), Area: area, Spot: spot, Count: count})
+	s.Spotinfo = append(s.Spotinfo, InnerSpotinfo{Time: time.Format(TimeLayout), Area: area, Spot: spot, Count: count})
 }
+
+//Size SpotInfo構造体のサイズを返す
+func (s *JSpotinfo) Size() int {
+	return len(s.Spotinfo)
+}
+
+//Add SpotInfo構造体をJSON用にパースして加える
+func (s *JSpotmaster) Add(area string, spot string, name string, lat string, lon string) {
+	s.Spotmaster = append(s.Spotmaster, InnerSpotmaster{Area: area, Spot: spot, Name: name, Lat: lat, Lon: lon})
+}
+
+//Size SpotInfo構造体のサイズを返す
+func (s *JSpotmaster) Size() int {
+	return len(s.Spotmaster)
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+// 関数
+//////////////////////////////////////////////////////////////////////////////////////
 
 //GetSessionID ログインしてセッションIDを取得する
 func GetSessionID() (string, error) {
@@ -281,7 +336,7 @@ func RegAllSpotInfo() (err error) {
 	defer lock.Unlock()
 	//特に指定してない場合は全スポット
 	if AreaIdString == "" {
-		AreaIdString = "1,2,3,5,6,4,10,12,7,8"
+		AreaIdString = AllSpot
 	}
 	fmt.Println("RegAllSpotInfo_Start AreaIdString =", AreaIdString)
 	AreaIDs := strings.Split(AreaIdString, ",")
@@ -298,16 +353,56 @@ func RegAllSpotInfo() (err error) {
 			fmt.Println("[Error]RegAllSpotInfo GetSpotInfoMain failed AreaID =", AreaID, err)
 			continue
 		}
-		//とりあえず最大１００件にしてみる
-		if len(list) <= 100 {
-			SendSpotInfo(ConvertSpotinfoStruct(list), false)
-		} else {
-			SendSpotInfo(ConvertSpotinfoStruct(list[:100]), false)
-			time.Sleep(1 * time.Second)
-			SendSpotInfo(ConvertSpotinfoStruct(list[100:]), false)
+		//負荷緩和のため100件ずつ送信
+		max := 100
+		jsondata := JSpotinfo{}
+		for _, s := range list {
+			jsondata.Add(s.Time, s.Area, s.Spot, s.Count)
+			if jsondata.Size() >= max {
+				SendSpotInfo(jsondata, false)
+				jsondata = JSpotinfo{}
+				time.Sleep(1 * time.Second)
+			}
+		}
+		if jsondata.Size() >= 1 {
+			SendSpotInfo(jsondata, false)
 		}
 	}
 	fmt.Println("RegAllSpotInfo_End")
+	return nil
+}
+
+//RegAllSpotMaster 全スポット登録関数（マスタメンテナンス）
+func RegAllSpotMaster() (err error) {
+	fmt.Println("RegAllSpotMaster_Start")
+	//マスタメンテでは全スポットを対象とする
+	AreaIDs := strings.Split(AllSpot, ",")
+	for _, AreaID := range AreaIDs {
+		//待ち時間いれる
+		time.Sleep(5 * time.Second)
+		//台数取得
+		var list []SpotInfo
+		list, err = GetSpotInfoMain(AreaID, true)
+		if err != nil {
+			fmt.Println("[Error]RegAllSpotMaster GetSpotInfoMain failed AreaID =", AreaID, err)
+			continue
+		}
+		//負荷緩和のため100件ずつ送信
+		max := 100
+		jsondata := JSpotmaster{}
+		for _, s := range list {
+			jsondata.Add(s.Area, s.Spot, s.Name, s.Lat, s.Lon)
+			if jsondata.Size() >= max {
+				SendSpotMaster(jsondata)
+				jsondata = JSpotmaster{}
+				time.Sleep(1 * time.Second)
+			}
+		}
+		if jsondata.Size() >= 1 {
+			SendSpotMaster(jsondata)
+		}
+	}
+	fmt.Println("RegAllSpotMaster_End")
 	return nil
 }
 
@@ -318,15 +413,6 @@ func CheckErrorPage(doc *goquery.Document) error {
 		return fmt.Errorf(strings.TrimSpace(doc.Find(".main_inner_message").Text()))
 	}
 	return nil
-}
-
-//ConvertSpotinfoStruct JSON用構造体に変換する
-func ConvertSpotinfoStruct(list []SpotInfo) JSpotinfo {
-	var jsonStruct JSpotinfo
-	for _, s := range list {
-		jsonStruct.Add(s.Time, s.Area, s.Spot, s.Count)
-	}
-	return jsonStruct
 }
 
 //SendSpotInfo DBに送信する。JSONファイルからのリカバリの場合は失敗したらJSONを保存しないフラグ（第２引数）
@@ -362,6 +448,39 @@ func SendSpotInfo(jsonStruct JSpotinfo, fromRecovery bool) error {
 		if !fromRecovery {
 			SaveJSON(jsonStruct)
 		}
+		return fmt.Errorf("StatusCode is not OK : %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+//SendSpotMaster マスタ情報をDBに送信する。
+func SendSpotMaster(jsonStruct JSpotmaster) error {
+	marshalized, _ := json.Marshal(jsonStruct)
+	req, err := http.NewRequest(
+		"POST",
+		SendAddress,
+		bytes.NewBuffer(marshalized),
+	)
+	if err != nil {
+		fmt.Println("[Error]SendSpotMaster create NewRequest failed", err.Error())
+		return err
+	}
+
+	// リクエストHead作成
+	ContentLength := strconv.FormatInt(req.ContentLength, 10)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Length", ContentLength)
+	req.Header.Set("cert", ApiCert)
+
+	//送信
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("[Error]SendSpotMaster client.Do failed", err.Error())
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("[Error]SendSpotMaster StatusCode is not OK", resp.StatusCode, resp.Body)
 		return fmt.Errorf("StatusCode is not OK : %d", resp.StatusCode)
 	}
 	defer resp.Body.Close()
@@ -404,14 +523,14 @@ func TestGetSpotInfoMain(html string) ([]SpotInfo, error) {
 
 }
 
-//Start スクレイピング開始
-func Start(w rest.ResponseWriter, r *rest.Request) {
+//PrepareScrayping スクレイピング準備（返り値がtrueの場合は実行しない）
+func PrepareScrayping(w rest.ResponseWriter, r *rest.Request) (cancel bool) {
 	//2分以内の連続実行を禁止する
 	if now := time.Now().Unix(); now-lastExcuted < 120 {
 		fmt.Println("2分以内に連続でリクエストされたためキャンセルしました。")
-		w.WriteHeader(http.StatusConflict)
+		w.WriteHeader(http.StatusOK)
 		w.WriteJson("scraping canceled")
-		return
+		return true
 	}
 	lastExcuted = time.Now().Unix()
 	//パラメータ解析
@@ -421,7 +540,7 @@ func Start(w rest.ResponseWriter, r *rest.Request) {
 	if params.Get("id") == "" || params.Get("password") == "" || SendAddress == "" {
 		w.WriteHeader(http.StatusForbidden)
 		w.WriteJson("[ERROR] lack of parameter")
-		return
+		return true
 	}
 	AreaIdString = params.Get("areaID")
 	if env := params.Get("env"); env != "" {
@@ -442,7 +561,7 @@ func Start(w rest.ResponseWriter, r *rest.Request) {
 			fmt.Println("[Error]Start GetSessionID failed", err)
 			w.WriteHeader(http.StatusBadRequest)
 			w.WriteJson("login failed")
-			return
+			return true
 		}
 	} else {
 		if UserID != params.Get("id") || Password != params.Get("password") {
@@ -454,12 +573,34 @@ func Start(w rest.ResponseWriter, r *rest.Request) {
 				fmt.Println("[Error]Start GetSessionID failed", err)
 				w.WriteHeader(http.StatusBadRequest)
 				w.WriteJson("login failed")
-				return
+				return true
 			}
 		}
 	}
+	return false
+}
+
+//Start スクレイピング開始
+func Start(w rest.ResponseWriter, r *rest.Request) {
+	//チェック＆初期化
+	if cancel := PrepareScrayping(w, r); cancel {
+		return
+	}
 	//スクレイピング実行（非同期）
 	go RegAllSpotInfo()
+	//先にOKを返しておく
+	w.WriteHeader(http.StatusOK)
+	w.WriteJson("OK")
+}
+
+//StartMaster スクレイピング開始
+func StartMaster(w rest.ResponseWriter, r *rest.Request) {
+	//チェック＆初期化
+	if cancel := PrepareScrayping(w, r); cancel {
+		return
+	}
+	//スクレイピング実行（非同期）
+	go RegAllSpotMaster()
 	//先にOKを返しておく
 	w.WriteHeader(http.StatusOK)
 	w.WriteJson("OK")
@@ -515,14 +656,14 @@ func EnumTempFiles() (result []string) {
 func Recover(w rest.ResponseWriter, r *rest.Request) {
 	if lastExcuted <= 0 {
 		fmt.Println("未初期化のためキャンセルしました。")
-		w.WriteHeader(http.StatusConflict)
+		w.WriteHeader(http.StatusOK)
 		w.WriteJson("recovery canceled")
 		return
 	}
 	//2分以内の連続実行を禁止する
 	if now := time.Now().Unix(); now-lastRecovered < 120 {
 		fmt.Println("2分以内に連続でリクエストされたためキャンセルしました。")
-		w.WriteHeader(http.StatusConflict)
+		w.WriteHeader(http.StatusOK)
 		w.WriteJson("recovery canceled")
 		return
 	}
@@ -588,6 +729,7 @@ func main() {
 	api.Use(rest.DefaultDevStack...)
 	router, err := rest.MakeRouter(
 		rest.Get("/start", Start),
+		rest.Get("/master", StartMaster),
 		rest.Get("/recover", Recover),
 	)
 	if err != nil {
