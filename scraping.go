@@ -678,10 +678,18 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 			max = val
 		}
 	}
-
+	//tmpファイルを列挙
 	files := EnumTempFiles()
 	if len(files) < 1 {
-		fmt.Println("no recovery cache")
+		fmt.Println("tmpにファイルがありません")
+		w.WriteHeader(http.StatusOK)
+		w.WriteJson("no recovery cache found")
+		return
+	} else if max == 0 {
+		msg := fmt.Sprintf("%d files found \n", len(files))
+		fmt.Println(msg)
+		w.WriteHeader(http.StatusOK)
+		w.WriteJson(msg)
 		return
 	}
 	for i, filename := range files {
