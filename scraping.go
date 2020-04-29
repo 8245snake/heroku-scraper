@@ -654,20 +654,6 @@ func EnumTempFiles() (result []string) {
 
 //Recover JSONからリカバリー
 func Recover(w rest.ResponseWriter, r *rest.Request) {
-	if lastExcuted <= 0 {
-		fmt.Println("未初期化のためキャンセルしました。")
-		w.WriteHeader(http.StatusOK)
-		w.WriteJson("recovery canceled")
-		return
-	}
-	//2分以内の連続実行を禁止する
-	if now := time.Now().Unix(); now-lastRecovered < 120 {
-		fmt.Println("2分以内に連続でリクエストされたためキャンセルしました。")
-		w.WriteHeader(http.StatusOK)
-		w.WriteJson("recovery canceled")
-		return
-	}
-	lastRecovered = time.Now().Unix()
 	//パラメータ解析
 	r.ParseForm()
 	params := r.Form
@@ -678,6 +664,24 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 			max = val
 		}
 	}
+	//max=0のときは件数確認のみのためチェックしない
+	if max > 0 {
+		if lastExcuted <= 0 {
+			fmt.Println("未初期化のためキャンセルしました。")
+			w.WriteHeader(http.StatusOK)
+			w.WriteJson("recovery canceled")
+			return
+		}
+		//2分以内の連続実行を禁止する
+		if now := time.Now().Unix(); now-lastRecovered < 120 {
+			fmt.Println("2分以内に連続でリクエストされたためキャンセルしました。")
+			w.WriteHeader(http.StatusOK)
+			w.WriteJson("recovery canceled")
+			return
+		}
+		lastRecovered = time.Now().Unix()
+	}
+
 	//tmpファイルを列挙
 	files := EnumTempFiles()
 	if len(files) < 1 {
@@ -686,8 +690,8 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 		w.WriteJson("no recovery cache found")
 		return
 	} else if max == 0 {
-		msg := fmt.Sprintf("%d files found \n", len(files))
-		fmt.Println(msg)
+		msg := fmt.Sprintf("%d files found : %v \n", len(files), files)
+		fmt.Printf(msg)
 		w.WriteHeader(http.StatusOK)
 		w.WriteJson(msg)
 		return
@@ -702,6 +706,10 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 		}
 		file, err := os.Open(path)
 		if err != nil {
+			msg := fmt.Sprintf("%s Open error : %v", path, err)
+			fmt.Println(msg)
+			w.WriteHeader(http.StatusOK)
+			w.WriteJson(msg)
 			return
 		}
 		defer file.Close()
@@ -709,18 +717,24 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 		d.DisallowUnknownFields() // エラーの場合 json: unknown field "JSONのフィールド名"
 		var jsonstruct JSpotinfo
 		if err := d.Decode(&jsonstruct); err != nil && err != io.EOF {
-			fmt.Println(err)
+			msg := fmt.Sprintf("%s Decode error : %v", path, err)
+			fmt.Println(msg)
+			w.WriteHeader(http.StatusOK)
+			w.WriteJson(msg)
 			return
 		}
 		//DB登録処理
 		if err := SendSpotInfo(jsonstruct, true); err != nil {
 			//同じファイルで失敗し続けないようにしたいが何回かリトライのチャンスを与えたいのでMAX回数を引き上げる
 			max++
+			fmt.Printf("%s SendSpotInfo error : %v \n", path, err)
 		} else {
 			//成功したらファイル削除
 			if err := os.Remove(path); err != nil {
-				fmt.Println(err.Error())
+				fmt.Printf("%s Remove error : %v \n", path, err)
+				continue
 			}
+			fmt.Printf("%s Recover success \n", path)
 		}
 	}
 }
