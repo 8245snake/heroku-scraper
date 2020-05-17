@@ -701,9 +701,9 @@ func Recover(w rest.ResponseWriter, r *rest.Request) {
 			break
 		}
 		path := filename
-		if runtime.GOOS != "windows" {
-			path = "/tmp/" + path
-		}
+		// if runtime.GOOS != "windows" {
+		// 	path = "/tmp/" + path
+		// }
 		file, err := os.Open(path)
 		if err != nil {
 			msg := fmt.Sprintf("%s Open error : %v", path, err)
